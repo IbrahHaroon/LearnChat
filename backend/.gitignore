@@ -1,0 +1,14 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+env/
+
+# Secrets
+.env
+
+# Generated files (re-created by running the scripts)
+chunks.json
+chroma_db/
