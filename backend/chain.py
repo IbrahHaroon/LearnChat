@@ -30,18 +30,17 @@ Why system prompt engineering matters:
 """
 
 import os
+from operator import itemgetter
 from typing import Iterator
 
 from dotenv import load_dotenv
 from langchain_core.documents import Document
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.retrievers import BaseRetriever
-from langchain_core.callbacks import CallbackManagerForRetrieverRun
 from langchain_groq import ChatGroq
-
-import chromadb
-from chromadb.utils import embedding_functions
+from langchain_pinecone import PineconeVectorStore
+from embeddings import HFEmbeddings
+from pinecone import Pinecone
 
 load_dotenv()
 
@@ -49,9 +48,8 @@ load_dotenv()
 # Configuration
 # ---------------------------------------------------------------------------
 
-CHROMA_DIR = "./chroma_db"
-COLLECTION_NAME = "langchain_docs"
-EMBEDDING_MODEL = "all-MiniLM-L6-v2"
+INDEX_NAME = os.getenv("PINECONE_INDEX_NAME", "langchain-docs")
+EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 TOP_K = 5
 
 # Groq: free tier, fast inference, great for RAG
@@ -59,65 +57,32 @@ LLM_MODEL = "llama-3.3-70b-versatile"
 
 
 # ---------------------------------------------------------------------------
-# 1. Custom LangChain Retriever wrapping ChromaDB
+# 1. Pinecone retriever
 # ---------------------------------------------------------------------------
 
-class ChromaRetriever(BaseRetriever):
+def build_retriever():
     """
-    A LangChain-compatible retriever backed by our ChromaDB collection.
+    Returns a LangChain retriever backed by Pinecone.
 
-    Why subclass BaseRetriever instead of using ChromaDB's LangChain integration?
-    - Transparency: you see exactly what happens during retrieval
-    - The LangChain ChromaDB wrapper is fine too, but this shows the internals
-    - We can attach source URLs as document metadata (important for the frontend)
+    Why Pinecone instead of ChromaDB?
+    - ChromaDB writes to disk — doesn't work on Vercel's ephemeral filesystem.
+    - Pinecone is a hosted vector DB: data lives in the cloud, survives deploys.
+
+    Why HuggingFace Inference API instead of sentence-transformers?
+    - sentence-transformers + PyTorch is ~500MB — exceeds Vercel's 250MB limit.
+    - The Inference API is a lightweight HTTP call to HuggingFace's servers.
+    - Same model (all-MiniLM-L6-v2), same results, no local download.
     """
+    pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
 
-    chroma_dir: str = CHROMA_DIR
-    collection_name: str = COLLECTION_NAME
-    embedding_model: str = EMBEDDING_MODEL
-    top_k: int = TOP_K
+    embeddings = HFEmbeddings(api_key=os.getenv("HUGGINGFACE_API_KEY"), model=EMBEDDING_MODEL)
 
-    def _get_relevant_documents(
-        self,
-        query: str,
-        *,
-        run_manager: CallbackManagerForRetrieverRun,
-    ) -> list[Document]:
-        """
-        Called by LangChain whenever the retriever is invoked.
-        run_manager is injected by LangChain — it handles LangSmith tracing.
-        """
-        client = chromadb.PersistentClient(path=self.chroma_dir)
-        ef = embedding_functions.SentenceTransformerEmbeddingFunction(
-            model_name=self.embedding_model
-        )
-        collection = client.get_or_create_collection(
-            name=self.collection_name,
-            embedding_function=ef,
-        )
+    vectorstore = PineconeVectorStore(
+        index=pc.Index(INDEX_NAME),
+        embedding=embeddings,
+    )
 
-        results = collection.query(
-            query_texts=[query],
-            n_results=self.top_k,
-            include=["documents", "metadatas", "distances"],
-        )
-
-        docs = results["documents"][0]
-        metas = results["metadatas"][0]
-        distances = results["distances"][0]
-
-        # Convert to LangChain Document objects (standard format)
-        return [
-            Document(
-                page_content=doc,
-                metadata={
-                    **meta,
-                    # Attach similarity score for debugging / display
-                    "score": round(1 - dist / 2, 4),
-                },
-            )
-            for doc, meta, dist in zip(docs, metas, distances)
-        ]
+    return vectorstore.as_retriever(search_kwargs={"k": TOP_K})
 
 
 # ---------------------------------------------------------------------------
@@ -199,7 +164,7 @@ def build_chain():
     Note: We use a dict to split the input so both {context} and {question}
     can reach the prompt template. This is a common LCEL pattern.
     """
-    retriever = ChromaRetriever()
+    retriever = build_retriever()
 
     llm = ChatGroq(
         model=LLM_MODEL,
@@ -217,9 +182,9 @@ def build_chain():
     # 6. Parse output to string
     chain = (
         {
-            "context": retriever | format_docs,
-            "question": lambda x: x["question"],
-            "history": lambda x: x["history"],
+            "context": itemgetter("question") | retriever | format_docs,
+            "question": itemgetter("question"),
+            "history": itemgetter("history"),
         }
         | RAG_PROMPT
         | llm
@@ -240,9 +205,8 @@ def ask(question: str) -> dict:
     """
     chain, retriever = build_chain()
 
-    # Get sources separately so we can return them alongside the answer
     sources = retriever.invoke(question)
-    answer = chain.invoke({"question": question})
+    answer = chain.invoke({"question": question, "history": "No prior conversation."})
 
     return {
         "answer": answer,
