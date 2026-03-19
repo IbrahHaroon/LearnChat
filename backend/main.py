@@ -39,13 +39,16 @@ Test it:
 
 import json
 import os
-from typing import AsyncIterator
+from typing import AsyncIterator, Optional
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 
 from chain import ask, ask_stream
 
@@ -55,11 +58,15 @@ load_dotenv()
 # App setup
 # ---------------------------------------------------------------------------
 
+limiter = Limiter(key_func=get_remote_address)
+
 app = FastAPI(
     title="LearnChat API",
     description="RAG chatbot for LangChain/LangGraph/LangSmith docs",
     version="0.1.0",
 )
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # Allow requests from the Next.js dev server (and any localhost port)
 app.add_middleware(
@@ -90,9 +97,9 @@ class ChatRequest(BaseModel):
 
 
 class SourceDoc(BaseModel):
-    source: str | None
-    url: str | None
-    score: float | None
+    source: Optional[str]
+    url: Optional[str]
+    score: Optional[float]
 
 
 class ChatResponse(BaseModel):
@@ -111,22 +118,24 @@ async def health():
 
 
 @app.post("/chat", response_model=ChatResponse)
-async def chat(request: ChatRequest):
+@limiter.limit("10/minute")
+async def chat(request: Request, body: ChatRequest):
     """
     Day 3 endpoint: full synchronous response.
 
     Returns the complete answer + source citations in one JSON payload.
     Good for testing the RAG chain before adding streaming.
     """
-    if not request.question.strip():
+    if not body.question.strip():
         raise HTTPException(status_code=400, detail="Question cannot be empty")
 
     try:
-        result = ask(request.question)
+        result = ask(body.question)
         return ChatResponse(
             answer=result["answer"],
             sources=[SourceDoc(**s) for s in result["sources"]],
         )
+
     except Exception as e:
         # In production you'd log this properly; for now print to console
         print(f"[ERROR] /chat failed: {e}")
@@ -134,7 +143,8 @@ async def chat(request: ChatRequest):
 
 
 @app.get("/chat/stream")
-async def chat_stream(question: str):
+@limiter.limit("10/minute")
+async def chat_stream(request: Request, question: str, history: str = "[]"):
     """
     Day 4 endpoint: SSE streaming response.
 
@@ -160,10 +170,11 @@ async def chat_stream(question: str):
         generating tokens rather than wasting compute on Gemini calls.
         """
         try:
-            for token in ask_stream(question):
-                if token.startswith("__SOURCES__"):
+            parsed_history = json.loads(history)
+            for token in ask_stream(question, parsed_history):
+                if "__SOURCES__" in token:
                     # Send sources as a named SSE event so frontend can distinguish
-                    sources_json = token[len("__SOURCES__"):]
+                    sources_json = token[token.index("__SOURCES__") + len("__SOURCES__"):]
                     yield f"event: sources\ndata: {sources_json}\n\n"
                 else:
                     # Escape newlines in token for SSE format compliance

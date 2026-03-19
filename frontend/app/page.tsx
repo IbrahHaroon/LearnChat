@@ -16,6 +16,7 @@
 
 import { useState, useRef, useCallback } from "react";
 import ChatWindow from "@/components/ChatWindow";
+import SidePanel from "@/components/SidePanel";
 import type { Message, SourceDoc } from "@/components/types";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
@@ -52,9 +53,12 @@ export default function Home() {
 
     setMessages((prev) => [...prev, userMsg, botMsg]);
 
+    // Build history from all completed messages before this turn
+    const history = messages.map((m) => ({ role: m.role, content: m.content }));
+
     // Open SSE connection to FastAPI
     // EventSource only supports GET, so we pass the question as a query param
-    const url = `${API_BASE}/chat/stream?question=${encodeURIComponent(question)}`;
+    const url = `${API_BASE}/chat/stream?question=${encodeURIComponent(question)}&history=${encodeURIComponent(JSON.stringify(history))}`;
     const es = new EventSource(url);
     eventSourceRef.current = es;
 
@@ -139,85 +143,103 @@ export default function Home() {
     }
   };
 
+  const hasMessages = messages.length > 0;
+
+  // Latest assistant message that has sources
+  const latestSources =
+    [...messages]
+      .reverse()
+      .find((m) => m.role === "assistant" && m.sources && m.sources.length > 0)
+      ?.sources ?? [];
+
+  const header = (
+    <header
+      className="flex items-center justify-between px-6 py-3 border-b shrink-0"
+      style={{ borderColor: "var(--border)", background: "var(--surface)" }}
+    >
+      <div className="flex items-center gap-3">
+        <div className="flex gap-1.5">
+          <span className="w-3 h-3 rounded-full bg-red-500 opacity-80" />
+          <span className="w-3 h-3 rounded-full bg-yellow-400 opacity-80" />
+          <span className="w-3 h-3 rounded-full bg-green-500 opacity-80" />
+        </div>
+        <span className="text-sm" style={{ color: "var(--text-muted)" }}>
+          learnchat — LangChain / LangGraph / LangSmith
+        </span>
+      </div>
+      <button
+        onClick={clearChat}
+        className="text-xs px-3 py-1 rounded border transition-colors hover:opacity-80"
+        style={{ borderColor: "var(--border)", color: "var(--text-muted)", background: "transparent" }}
+        title="Clear chat (⌘K)"
+      >
+        clear
+      </button>
+    </header>
+  );
+
+  const inputBar = (
+    <div
+      className="border-t px-4 py-3 shrink-0"
+      style={{ borderColor: "var(--border)", background: "var(--surface)" }}
+    >
+      <div
+        className="flex items-end gap-3 max-w-3xl mx-auto rounded-lg border px-4 py-3"
+        style={{ borderColor: "var(--border)", background: "var(--bg)" }}
+      >
+        <span className="text-sm pb-0.5 select-none" style={{ color: "var(--accent)" }}>
+          &gt;
+        </span>
+        <textarea
+          className="flex-1 bg-transparent resize-none outline-none text-sm leading-relaxed"
+          style={{ color: "var(--text)", caretColor: "var(--accent)" }}
+          placeholder="Ask about LangChain, LangGraph, or LangSmith..."
+          rows={1}
+          value={input}
+          onChange={(e) => {
+            setInput(e.target.value);
+            e.target.style.height = "auto";
+            e.target.style.height = `${Math.min(e.target.scrollHeight, 120)}px`;
+          }}
+          onKeyDown={handleKeyDown}
+          disabled={isStreaming}
+        />
+        <button
+          onClick={sendMessage}
+          disabled={!input.trim() || isStreaming}
+          className="text-xs px-3 py-1.5 rounded transition-all disabled:opacity-30"
+          style={{ background: "var(--accent)", color: "#0d1117", fontWeight: 600 }}
+        >
+          {isStreaming ? "..." : "send"}
+        </button>
+      </div>
+      <p className="text-center text-xs mt-2" style={{ color: "var(--text-muted)" }}>
+        Enter to send · Shift+Enter for newline
+      </p>
+    </div>
+  );
+
+  if (!hasMessages) {
+    return (
+      <div className="flex flex-col h-screen" style={{ background: "var(--bg)" }}>
+        {header}
+        <ChatWindow messages={messages} isStreaming={isStreaming} />
+        {inputBar}
+      </div>
+    );
+  }
+
   return (
     <div className="flex flex-col h-screen" style={{ background: "var(--bg)" }}>
-      {/* Header */}
-      <header
-        className="flex items-center justify-between px-6 py-3 border-b"
-        style={{ borderColor: "var(--border)", background: "var(--surface)" }}
-      >
-        <div className="flex items-center gap-3">
-          {/* Traffic light dots — terminal aesthetic */}
-          <div className="flex gap-1.5">
-            <span className="w-3 h-3 rounded-full bg-red-500 opacity-80" />
-            <span className="w-3 h-3 rounded-full bg-yellow-400 opacity-80" />
-            <span className="w-3 h-3 rounded-full bg-green-500 opacity-80" />
-          </div>
-          <span className="text-sm" style={{ color: "var(--text-muted)" }}>
-            learnchat — LangChain / LangGraph / LangSmith
-          </span>
+      {header}
+      <div className="flex flex-1 overflow-hidden">
+        {/* Left: chat */}
+        <div className="flex flex-col flex-1 overflow-hidden">
+          <ChatWindow messages={messages} isStreaming={isStreaming} />
+          {inputBar}
         </div>
-
-        <button
-          onClick={clearChat}
-          className="text-xs px-3 py-1 rounded border transition-colors hover:opacity-80"
-          style={{
-            borderColor: "var(--border)",
-            color: "var(--text-muted)",
-            background: "transparent",
-          }}
-          title="Clear chat (⌘K)"
-        >
-          clear
-        </button>
-      </header>
-
-      {/* Chat messages */}
-      <ChatWindow messages={messages} isStreaming={isStreaming} />
-
-      {/* Input area */}
-      <div
-        className="border-t px-4 py-3"
-        style={{ borderColor: "var(--border)", background: "var(--surface)" }}
-      >
-        <div
-          className="flex items-end gap-3 max-w-3xl mx-auto rounded-lg border px-4 py-3"
-          style={{ borderColor: "var(--border)", background: "var(--bg)" }}
-        >
-          <span className="text-sm pb-0.5 select-none" style={{ color: "var(--accent)" }}>
-            &gt;
-          </span>
-          <textarea
-            className="flex-1 bg-transparent resize-none outline-none text-sm leading-relaxed"
-            style={{ color: "var(--text)", caretColor: "var(--accent)" }}
-            placeholder="Ask about LangChain, LangGraph, or LangSmith..."
-            rows={1}
-            value={input}
-            onChange={(e) => {
-              setInput(e.target.value);
-              // Auto-resize up to ~5 lines
-              e.target.style.height = "auto";
-              e.target.style.height = `${Math.min(e.target.scrollHeight, 120)}px`;
-            }}
-            onKeyDown={handleKeyDown}
-            disabled={isStreaming}
-          />
-          <button
-            onClick={sendMessage}
-            disabled={!input.trim() || isStreaming}
-            className="text-xs px-3 py-1.5 rounded transition-all disabled:opacity-30"
-            style={{
-              background: "var(--accent)",
-              color: "#0d1117",
-              fontWeight: 600,
-            }}
-          >
-            {isStreaming ? "..." : "send"}
-          </button>
-        </div>
-        <p className="text-center text-xs mt-2" style={{ color: "var(--text-muted)" }}>
-          Enter to send · Shift+Enter for newline
-        </p>
+        {/* Right: sources + context */}
+        <SidePanel sources={latestSources} messages={messages} />
       </div>
     </div>
   );

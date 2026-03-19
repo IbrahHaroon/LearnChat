@@ -64,10 +64,7 @@ export default function MessageBubble({ message }: MessageBubbleProps) {
           )}
         </div>
 
-        {/* Source links — shown after streaming completes */}
-        {!message.isStreaming && message.sources && message.sources.length > 0 && (
-          <SourceLinks sources={message.sources} />
-        )}
+        {/* Sources are shown in the right sidebar */}
       </div>
     </div>
   );

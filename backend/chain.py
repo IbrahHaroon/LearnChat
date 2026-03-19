@@ -38,7 +38,7 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.retrievers import BaseRetriever
 from langchain_core.callbacks import CallbackManagerForRetrieverRun
-from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_groq import ChatGroq
 
 import chromadb
 from chromadb.utils import embedding_functions
@@ -54,8 +54,8 @@ COLLECTION_NAME = "langchain_docs"
 EMBEDDING_MODEL = "all-MiniLM-L6-v2"
 TOP_K = 5
 
-# Gemini 1.5 Flash: fast, generous free tier, great for RAG
-LLM_MODEL = "gemini-1.5-flash"
+# Groq: free tier, fast inference, great for RAG
+LLM_MODEL = "llama-3.3-70b-versatile"
 
 
 # ---------------------------------------------------------------------------
@@ -143,9 +143,13 @@ When you answer:
 - Be clear and concise
 - Reference specific concepts by name
 - Mention which doc section the info comes from (e.g., "According to the LCEL docs...")
+- Use the conversation history below to understand follow-up questions and pronouns like "it", "that", "they"
 
 Context from documentation:
 {context}
+
+Conversation history:
+{history}
 """),
     ("human", "{question}"),
 ])
@@ -197,11 +201,11 @@ def build_chain():
     """
     retriever = ChromaRetriever()
 
-    llm = ChatGoogleGenerativeAI(
+    llm = ChatGroq(
         model=LLM_MODEL,
         temperature=0.2,       # Low temp = more factual, less creative
         streaming=True,        # Enable token-by-token streaming
-        google_api_key=os.getenv("GOOGLE_API_KEY"),
+        api_key=os.getenv("GROQ_API_KEY"),
     )
 
     # The chain:
@@ -215,6 +219,7 @@ def build_chain():
         {
             "context": retriever | format_docs,
             "question": lambda x: x["question"],
+            "history": lambda x: x["history"],
         }
         | RAG_PROMPT
         | llm
@@ -252,7 +257,7 @@ def ask(question: str) -> dict:
     }
 
 
-def ask_stream(question: str) -> Iterator[str]:
+def ask_stream(question: str, history: list[dict] = []) -> Iterator[str]:
     """
     Streaming Q&A: yields tokens as they arrive from Gemini.
     Used by main.py for SSE streaming (Day 4).
@@ -269,8 +274,14 @@ def ask_stream(question: str) -> Iterator[str]:
     # Retrieve sources first (fast, local ChromaDB query)
     sources = retriever.invoke(question)
 
+    # Format history as a readable string for the prompt
+    history_str = "\n".join(
+        f"{'User' if m['role'] == 'user' else 'Assistant'}: {m['content']}"
+        for m in history
+    ) if history else "No prior conversation."
+
     # Stream the LLM response token by token
-    for token in chain.stream({"question": question}):
+    for token in chain.stream({"question": question, "history": history_str}):
         yield token
 
     # After all tokens, send a special delimiter + sources JSON

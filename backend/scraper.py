@@ -83,8 +83,13 @@ def fetch_page(url: str) -> str:
     # get_text with separator=" " turns <br> and block elements into spaces
     text = main.get_text(separator=" ", strip=True)
 
-    # Collapse multiple whitespace into single spaces (cleaner chunks)
     import re
+    # Remove zero-width spaces and other invisible Unicode chars
+    text = re.sub(r"[\u200b\u200c\u200d\ufeff]", "", text)
+    # Strip repeated UI elements that appear on every page
+    text = re.sub(r"\bLearn more\b", "", text)
+    text = re.sub(r"Edit this page on GitHub.*", "", text)
+    # Collapse multiple whitespace into single spaces (cleaner chunks)
     text = re.sub(r"\s+", " ", text).strip()
 
     return text
@@ -139,6 +144,7 @@ def chunk_text(text: str, source: str, url: str) -> list[dict]:
 def scrape_all() -> list[dict]:
     """Scrape all URLs and return a flat list of chunks."""
     all_chunks = []
+    seen_texts: set[str] = set()  # deduplicate identical chunks across pages
 
     for url, source in URLS:
         print(f"\n→ Scraping: {source}")
@@ -151,9 +157,14 @@ def scrape_all() -> list[dict]:
             continue
 
         chunks = chunk_text(text, source=source, url=url)
-        all_chunks.extend(chunks)
 
-        print(f"  [OK] {len(text):,} chars → {len(chunks)} chunks")
+        # Drop any chunk whose text we've seen from another page
+        unique = [c for c in chunks if c["text"] not in seen_texts]
+        seen_texts.update(c["text"] for c in unique)
+        skipped = len(chunks) - len(unique)
+        all_chunks.extend(unique)
+
+        print(f"  [OK] {len(text):,} chars → {len(unique)} chunks ({skipped} duplicates removed)")
 
         # Be polite to the servers — don't hammer them
         time.sleep(0.5)
