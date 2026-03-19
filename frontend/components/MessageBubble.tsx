@@ -15,7 +15,6 @@
  */
 
 import type { Message } from "./types";
-import SourceLinks from "./SourceLinks";
 
 interface MessageBubbleProps {
   message: Message;

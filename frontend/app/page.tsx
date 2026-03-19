@@ -125,7 +125,7 @@ export default function Home() {
       setIsStreaming(false);
       es.close();
     };
-  }, [input, isStreaming]);
+  }, [input, isStreaming, messages]);
 
   const clearChat = useCallback(() => {
     if (isStreaming) {

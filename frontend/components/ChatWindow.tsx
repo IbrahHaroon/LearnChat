@@ -19,10 +19,10 @@ import type { Message } from "./types";
 
 interface ChatWindowProps {
   messages: Message[];
-  isStreaming: boolean;
+  isStreaming?: boolean;
 }
 
-export default function ChatWindow({ messages, isStreaming }: ChatWindowProps) {
+export default function ChatWindow({ messages }: ChatWindowProps) {
   const bottomRef = useRef<HTMLDivElement>(null);
 
   // Scroll to bottom whenever messages update (new token arrives, new message added)
