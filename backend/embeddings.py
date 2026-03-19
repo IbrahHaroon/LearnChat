@@ -16,9 +16,7 @@ class HFEmbeddings(Embeddings):
         self.client = InferenceClient(api_key=api_key)
 
     def embed_documents(self, texts: list) -> list:
-        results = self.client.text_embeddings(texts, model=self.model)
-        return [list(e) for e in results]
+        return [self.client.feature_extraction(t, model=self.model).tolist() for t in texts]
 
     def embed_query(self, text: str) -> list:
-        results = self.client.text_embeddings([text], model=self.model)
-        return list(results[0])
+        return self.client.feature_extraction(text, model=self.model).tolist()

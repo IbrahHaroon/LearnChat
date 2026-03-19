@@ -14,7 +14,7 @@ langchain-pinecone==0.2.0
 langsmith==0.1.120
 
 # Embeddings (HuggingFace Inference API — no local model download)
-huggingface-hub==0.25.2
+huggingface-hub==0.36.2
 
 # Vector database
 pinecone==5.0.1
